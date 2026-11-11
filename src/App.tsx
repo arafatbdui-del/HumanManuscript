@@ -2,10 +2,12 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * HumanManuscript: Main Legal & Human Rights Studio Application (design.md)
+ * Fully functional rich-text editor (TipTap), Word document parser (Mammoth),
+ * PDF parser (PDF.js), and Mendeley reference importer (.bib and .ris).
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { Manuscript, Section, Block, Footnote, Source, OriginalityFlag, Proposal } from './types/manuscript';
+import React, { useState, useEffect, useRef } from 'react';
+import { Manuscript, Section, Block, Footnote, Source, OriginalityFlag } from './types/manuscript';
 import {
   loadManuscript,
   saveManuscript,
@@ -14,13 +16,17 @@ import {
   generateAIUseStatement,
 } from './services/storage';
 import { runFullOriginalityScan } from './services/originalityGuard';
+import { ParsedDocumentResult } from './services/documentParser';
+import { formatCitationForEditor } from './services/referenceParser';
 import { TitleBar } from './components/TitleBar';
 import { Ribbon, RibbonTab } from './components/Ribbon';
 import { NavigationPane } from './components/NavigationPane';
-import { EditorCanvas } from './components/EditorCanvas';
+import { TipTapEditor, TipTapEditorHandle } from './components/editor/TipTapEditor';
 import { TaskPane, TaskPaneTab } from './components/TaskPane';
 import { StatusBar } from './components/StatusBar';
 import { AddSourceModal } from './components/modals/AddSourceModal';
+import { DocumentUploadModal } from './components/modals/DocumentUploadModal';
+import { ImportReferencesModal } from './components/modals/ImportReferencesModal';
 import { ResponseLetterModal } from './components/modals/ResponseLetterModal';
 import { PreSubmissionModal } from './components/modals/PreSubmissionModal';
 import { SettingsModal } from './components/modals/SettingsModal';
@@ -38,16 +44,23 @@ export default function App() {
   const [selectedFootnote, setSelectedFootnote] = useState<Footnote | null>(null);
   const [viewMode, setViewMode] = useState<'pages' | 'draft' | 'focus'>('pages');
   const [zoomLevel, setZoomLevel] = useState<number>(100);
+  const [fontSize, setFontSize] = useState<string>('12pt');
+  const [fontFamily, setFontFamily] = useState<string>('font-serif-legal');
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedText, setLastSavedText] = useState('Saved locally');
 
   // Modals state
   const [isAddSourceOpen, setIsAddSourceOpen] = useState(false);
+  const [isUploadDocOpen, setIsUploadDocOpen] = useState(false);
+  const [isImportRefsOpen, setIsImportRefsOpen] = useState(false);
   const [isResponseLetterOpen, setIsResponseLetterOpen] = useState(false);
   const [isPreSubmissionOpen, setIsPreSubmissionOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCommandSearchOpen, setIsCommandSearchOpen] = useState(false);
   const [contractInspectorSection, setContractInspectorSection] = useState<Section | null>(null);
+
+  // TipTap Editor reference
+  const tipTapRef = useRef<TipTapEditorHandle>(null);
 
   // Auto-Save Effect
   useEffect(() => {
@@ -89,6 +102,19 @@ export default function App() {
   // Active section helper
   const activeSection = manuscript.sections.find(s => s.id === activeSectionId) || manuscript.sections[0];
 
+  // Prepare initial HTML content for active section
+  const getActiveSectionHtml = () => {
+    return activeSection.blocks
+      .map(b => {
+        if (b.type === 'heading1') return `<h1>${b.content}</h1>`;
+        if (b.type === 'heading2') return `<h2>${b.content}</h2>`;
+        if (b.type === 'heading3') return `<h3>${b.content}</h3>`;
+        if (b.type === 'quote') return `<blockquote>${b.content}</blockquote>`;
+        return `<p>${b.content}</p>`;
+      })
+      .join('');
+  };
+
   // Word metrics calculation
   const currentSectionWords = activeSection.blocks.reduce((acc, b) => {
     return acc + (b.content.trim().match(/\b\w+\b/g)?.length || 0);
@@ -111,78 +137,158 @@ export default function App() {
     const nextNumber = manuscript.footnotes.length + 1;
     const newFootnoteId = `fn_${Date.now()}`;
 
-    // Target block: provided or first paragraph in active section
-    const blockToAttach = targetBlockId
-      ? activeSection.blocks.find(b => b.id === targetBlockId)
-      : activeSection.blocks.find(b => b.type === 'paragraph') || activeSection.blocks[0];
-
-    if (!blockToAttach) return;
-
     const newFootnote: Footnote = {
       id: newFootnoteId,
       number: nextNumber,
-      blockId: blockToAttach.id,
+      blockId: targetBlockId || activeSection.blocks[0]?.id || `blk_${Date.now()}`,
       content: `Author footnote citation ${nextNumber}.`,
       citations: [],
     };
 
-    // Append [fnX] marker to block
-    const updatedContent = `${blockToAttach.content} [fn${nextNumber}]`;
+    // Insert [fnX] superscript directly into the TipTap editor at cursor position
+    tipTapRef.current?.insertCitation(`[fn${nextNumber}]`);
 
     setManuscript(prev => ({
       ...prev,
       footnotes: [...prev.footnotes, newFootnote],
-      sections: prev.sections.map(sec => {
-        if (sec.id !== activeSection.id) return sec;
-        return {
-          ...sec,
-          blocks: sec.blocks.map(b => (b.id === blockToAttach.id ? { ...b, content: updatedContent } : b)),
-        };
-      }),
     }));
 
     setSelectedFootnote(newFootnote);
     setActiveTaskPaneTab('citations');
   };
 
-  // Update Block Content
-  const handleUpdateBlockContent = (secId: string, blockId: string, newContent: string) => {
+  // Content updated from TipTap Editor
+  const handleTipTapContentChange = (html: string, plainText: string, wordCount: number) => {
+    // Parse paragraphs from HTML to update active section blocks
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const nodes = Array.from(doc.body.children);
+
+    const updatedBlocks: Block[] = nodes.map((node, idx) => {
+      let type: Block['type'] = 'paragraph';
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'h1') type = 'heading1';
+      else if (tag === 'h2') type = 'heading2';
+      else if (tag === 'h3') type = 'heading3';
+      else if (tag === 'blockquote') type = 'quote';
+
+      return {
+        id: activeSection.blocks[idx]?.id || `blk_${Date.now()}_${idx}`,
+        sectionId: activeSection.id,
+        order: idx + 1,
+        type,
+        content: node.textContent || '',
+      };
+    });
+
     setManuscript(prev => ({
       ...prev,
-      sections: prev.sections.map(sec => {
-        if (sec.id !== secId) return sec;
+      sections: prev.sections.map(s => {
+        if (s.id !== activeSection.id) return s;
         return {
-          ...sec,
-          blocks: sec.blocks.map(b => (b.id === blockId ? { ...b, content: newContent } : b)),
+          ...s,
+          blocks: updatedBlocks.length > 0 ? updatedBlocks : s.blocks,
         };
       }),
     }));
   };
 
-  // Add Paragraph Block to Section
-  const handleAddBlock = (secId: string) => {
-    const newBlockId = `blk_${Date.now()}`;
-    const newBlock: Block = {
-      id: newBlockId,
-      sectionId: secId,
-      order: 99,
-      type: 'paragraph',
-      content: 'New doctrinal paragraph formulating legal reasoning and applying primary authority...',
-    };
+  // Document Upload Insertion Handler (Mammoth .docx, PDF.js .pdf, .txt)
+  const handleInsertParsedDocument = (
+    result: ParsedDocumentResult,
+    mode: 'replace-section' | 'append-section' | 'new-section'
+  ) => {
+    if (mode === 'replace-section') {
+      tipTapRef.current?.setContent(result.htmlContent);
+      handleTipTapContentChange(result.htmlContent, result.plainText, result.wordCount);
+    } else if (mode === 'append-section') {
+      tipTapRef.current?.insertHtml(result.htmlContent);
+    } else if (mode === 'new-section') {
+      const newSecId = `sec_${Date.now()}`;
+      const newSection: Section = {
+        id: newSecId,
+        manuscriptId: manuscript.id,
+        order: manuscript.sections.length + 1,
+        role: 'Uploaded Document',
+        title: result.title,
+        wordTarget: result.wordCount || 1500,
+        status: 'drafting',
+        contract: {
+          role: 'Uploaded Content',
+          description: `Extracted from uploaded ${result.fileType.toUpperCase()} file.`,
+          wordTarget: result.wordCount || 1500,
+          wordTolerance: 150,
+          requiredMoves: ['substantive-analysis', 'primary-authority'],
+          citationRules: ['Ensure citations are verified against library.'],
+        },
+        blocks: [
+          {
+            id: `blk_${Date.now()}`,
+            sectionId: newSecId,
+            order: 1,
+            type: 'paragraph',
+            content: result.plainText.substring(0, 500) + '...',
+          },
+        ],
+      };
 
-    setManuscript(prev => ({
-      ...prev,
-      sections: prev.sections.map(sec => {
-        if (sec.id !== secId) return sec;
-        return {
-          ...sec,
-          blocks: [...sec.blocks, newBlock],
-        };
-      }),
-    }));
+      setManuscript(prev => ({
+        ...prev,
+        sections: [...prev.sections, newSection],
+      }));
+      setActiveSectionId(newSecId);
+      setTimeout(() => {
+        tipTapRef.current?.setContent(result.htmlContent);
+      }, 50);
+    }
   };
 
-  // Add New Section to Manuscript Skeleton
+  // Mendeley Reference Import Handler (.bib and .ris)
+  const handleImportMendeleySources = (importedSources: Source[]) => {
+    setManuscript(prev => ({
+      ...prev,
+      sources: [...importedSources, ...prev.sources],
+    }));
+    setActiveTaskPaneTab('citations');
+  };
+
+  // Insert Citation at cursor in TipTap Editor
+  const handleInsertCitationToEditor = (
+    source: Source,
+    style: 'oscola-footnote' | 'in-text-author-year' | 'in-text-numeric' | 'apa'
+  ) => {
+    if (style === 'oscola-footnote') {
+      // Create new footnote and insert [fnX]
+      const nextNum = manuscript.footnotes.length + 1;
+      const newFn: Footnote = {
+        id: `fn_${Date.now()}`,
+        number: nextNum,
+        blockId: activeSection.blocks[0]?.id || `blk_${Date.now()}`,
+        content: source.citationString || `${source.title} (${source.year})`,
+        citations: [
+          {
+            id: `cit_${Date.now()}`,
+            footnoteId: `fn_${Date.now()}`,
+            sourceId: source.id,
+          },
+        ],
+      };
+
+      tipTapRef.current?.insertCitation(`[fn${nextNum}]`);
+
+      setManuscript(prev => ({
+        ...prev,
+        footnotes: [...prev.footnotes, newFn],
+      }));
+    } else {
+      // In-text citation
+      const indexNum = manuscript.sources.findIndex(s => s.id === source.id) + 1;
+      const citeStr = formatCitationForEditor(source, style, indexNum > 0 ? indexNum : 1);
+      tipTapRef.current?.insertCitation(citeStr);
+    }
+  };
+
+  // Add Section to Skeleton
   const handleAddSection = () => {
     const secCount = manuscript.sections.length;
     const newSecId = `sec_${Date.now()}`;
@@ -249,6 +355,12 @@ export default function App() {
             return b;
           }),
         }));
+
+        // Also update active TipTap editor if current section
+        const activeBlock = activeSection.blocks.find(b => b.id === op.blockId);
+        if (activeBlock) {
+          tipTapRef.current?.insertHtml(`<p><strong>[Proposal Accepted]</strong> ${op.after}</p>`);
+        }
       }
     }
 
@@ -298,26 +410,15 @@ export default function App() {
       return;
     }
 
-    // If 'quote', wrap span in single quotes in the block text
     if (fixType === 'quote') {
+      tipTapRef.current?.insertCitation(`'${flag.textSpan}'`);
       setManuscript(prev => ({
         ...prev,
         originalityFlags: prev.originalityFlags.map(f =>
           f.id === flag.id ? { ...f, status: 'fixed', kind: 'properly-quoted' } : f
         ),
-        sections: prev.sections.map(sec => ({
-          ...sec,
-          blocks: sec.blocks.map(b => {
-            if (b.id === flag.blockId) {
-              const quoted = `'${flag.textSpan}'`;
-              return { ...b, content: b.content.replace(flag.textSpan, quoted) };
-            }
-            return b;
-          }),
-        })),
       }));
     } else if (fixType === 'cite') {
-      // Attach footnote citation
       handleInsertFootnote(flag.blockId);
       setManuscript(prev => ({
         ...prev,
@@ -342,7 +443,9 @@ export default function App() {
   const handleUpdateContract = (secId: string, updatedContract: Section['contract']) => {
     setManuscript(prev => ({
       ...prev,
-      sections: prev.sections.map(s => (s.id === secId ? { ...s, contract: updatedContract, wordTarget: updatedContract.wordTarget } : s)),
+      sections: prev.sections.map(s =>
+        s.id === secId ? { ...s, contract: updatedContract, wordTarget: updatedContract.wordTarget } : s
+      ),
     }));
   };
 
@@ -399,6 +502,8 @@ export default function App() {
         onSelectTab={setActiveRibbonTab}
         onInsertFootnote={() => handleInsertFootnote()}
         onOpenAddSource={() => setIsAddSourceOpen(true)}
+        onOpenUploadModal={() => setIsUploadDocOpen(true)}
+        onOpenImportReferences={() => setIsImportRefsOpen(true)}
         onToggleTrackChanges={() => {
           setManuscript(prev => ({
             ...prev,
@@ -432,9 +537,9 @@ export default function App() {
         onOpenCommandSearch={() => setIsCommandSearchOpen(true)}
       />
 
-      {/* 3. Main Workspace Area: Navigation Pane | Center Page Canvas | Task Pane */}
+      {/* 3. Main Workspace Area: Left Navigation | Center TipTap Editor | Right Task Pane */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Navigation Pane (Headings tree & contract budget) */}
+        {/* Left Navigation Pane (Headings tree & section contracts) */}
         {viewMode !== 'focus' && (
           <NavigationPane
             sections={manuscript.sections}
@@ -445,27 +550,28 @@ export default function App() {
           />
         )}
 
-        {/* Center Canvas (Word paper pages layout with footnotes & originality marks) */}
-        <EditorCanvas
-          sections={manuscript.sections}
-          activeSectionId={activeSectionId}
+        {/* Center Canvas: Full Rich Text TipTap Editor with Word A4 Pages View */}
+        <TipTapEditor
+          ref={tipTapRef}
+          initialContent={getActiveSectionHtml()}
+          activeSection={activeSection}
           footnotes={manuscript.footnotes}
-          sources={manuscript.sources}
-          originalityFlags={manuscript.originalityFlags}
           viewMode={viewMode}
           zoomLevel={zoomLevel}
-          trackChangesActive={manuscript.settings.trackChanges}
-          onUpdateBlockContent={handleUpdateBlockContent}
-          onInsertFootnoteAtBlock={handleInsertFootnote}
+          onContentChange={handleTipTapContentChange}
+          onOpenUploadModal={() => setIsUploadDocOpen(true)}
+          onInsertFootnoteClick={() => handleInsertFootnote()}
           onSelectFootnote={fn => {
             setSelectedFootnote(fn);
             setActiveTaskPaneTab('citations');
           }}
-          onFixOriginalityFlag={handleFixOriginalityFlag}
-          onAddBlock={handleAddBlock}
+          fontSize={fontSize}
+          onChangeFontSize={setFontSize}
+          fontFamily={fontFamily}
+          onChangeFontFamily={setFontFamily}
         />
 
-        {/* Right Contextual Task Pane (Library, Evidence Workbench, Review Desk, Language Studio, AI Copilot) */}
+        {/* Right Contextual Task Pane (Reference Library with Mendeley support, Workbench, Review Desk, etc.) */}
         {viewMode !== 'focus' && (
           <TaskPane
             activeTab={activeTaskPaneTab}
@@ -475,6 +581,8 @@ export default function App() {
             selectedFootnote={selectedFootnote}
             onSelectFootnote={setSelectedFootnote}
             onOpenAddSource={() => setIsAddSourceOpen(true)}
+            onOpenImportReferences={() => setIsImportRefsOpen(true)}
+            onInsertCitationToEditor={handleInsertCitationToEditor}
             onApplyProposal={handleApplyProposal}
             onRejectProposal={handleRejectProposal}
             onUpdateFootnoteContent={handleUpdateFootnoteContent}
@@ -501,6 +609,18 @@ export default function App() {
         isOpen={isAddSourceOpen}
         onClose={() => setIsAddSourceOpen(false)}
         onAddSource={handleAddSource}
+      />
+
+      <DocumentUploadModal
+        isOpen={isUploadDocOpen}
+        onClose={() => setIsUploadDocOpen(false)}
+        onInsertParsedContent={handleInsertParsedDocument}
+      />
+
+      <ImportReferencesModal
+        isOpen={isImportRefsOpen}
+        onClose={() => setIsImportRefsOpen(false)}
+        onImportSources={handleImportMendeleySources}
       />
 
       <ResponseLetterModal

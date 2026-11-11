@@ -46,6 +46,8 @@ interface RibbonProps {
   onSelectTab: (tab: RibbonTab) => void;
   onInsertFootnote: () => void;
   onOpenAddSource: () => void;
+  onOpenUploadModal: () => void;
+  onOpenImportReferences: () => void;
   onToggleTrackChanges: () => void;
   trackChangesActive: boolean;
   onOpenReviewDesk: () => void;
@@ -67,6 +69,8 @@ export const Ribbon: React.FC<RibbonProps> = ({
   onSelectTab,
   onInsertFootnote,
   onOpenAddSource,
+  onOpenUploadModal,
+  onOpenImportReferences,
   onToggleTrackChanges,
   trackChangesActive,
   onOpenReviewDesk,
@@ -144,6 +148,14 @@ export const Ribbon: React.FC<RibbonProps> = ({
         {activeTab === 'File' && (
           <>
             <div className="flex items-center gap-2 pr-4 border-r border-slate-200">
+              <button
+                onClick={onOpenUploadModal}
+                className="flex flex-col items-center justify-center p-1.5 w-18 h-18 rounded bg-emerald-50/80 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 transition shadow-2xs"
+                title="Upload .docx, .pdf, or .txt"
+              >
+                <Upload className="w-5 h-5 text-emerald-600 mb-1" />
+                <span className="text-[11px] font-semibold leading-tight text-center">Upload Doc</span>
+              </button>
               <button
                 onClick={onExportWord}
                 className="flex flex-col items-center justify-center p-1.5 w-16 h-18 rounded hover:bg-slate-100 text-slate-700 transition"
@@ -302,6 +314,14 @@ export const Ribbon: React.FC<RibbonProps> = ({
         {activeTab === 'References' && (
           <>
             <div className="flex items-center gap-2 pr-3 border-r border-slate-200">
+              <button
+                onClick={onOpenImportReferences}
+                className="flex flex-col items-center justify-center p-1.5 w-24 h-18 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 transition shadow-2xs"
+                title="Import .bib or .ris references from Mendeley"
+              >
+                <BookMarked className="w-5 h-5 text-indigo-600 mb-1" />
+                <span className="text-[11px] font-semibold leading-tight text-center">Import Mendeley</span>
+              </button>
               <button
                 onClick={onOpenAddSource}
                 className="flex flex-col items-center justify-center p-1.5 w-20 h-18 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 transition"

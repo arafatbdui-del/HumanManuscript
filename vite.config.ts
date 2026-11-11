@@ -46,6 +46,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024, // 6 MiB
         },
         devOptions: {
           enabled: true,
@@ -55,7 +56,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(__dirname || import.meta.dirname || '.'),
       },
     },
     server: {

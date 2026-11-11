@@ -57,6 +57,8 @@ interface TaskPaneProps {
   selectedFootnote: Footnote | null;
   onSelectFootnote: (fn: Footnote | null) => void;
   onOpenAddSource: () => void;
+  onOpenImportReferences: () => void;
+  onInsertCitationToEditor: (source: Source, style: 'oscola-footnote' | 'in-text-author-year' | 'in-text-numeric' | 'apa') => void;
   onApplyProposal: (proposalId: string) => void;
   onRejectProposal: (proposalId: string) => void;
   onUpdateFootnoteContent: (fnId: string, newContent: string) => void;
@@ -71,12 +73,17 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
   selectedFootnote,
   onSelectFootnote,
   onOpenAddSource,
+  onOpenImportReferences,
+  onInsertCitationToEditor,
   onApplyProposal,
   onRejectProposal,
   onUpdateFootnoteContent,
   onFixOriginalityFlag,
 }) => {
   const [workbenchMode, setWorkbenchMode] = useState<'extract' | 'compare' | 'differences' | 'ask'>('compare');
+  const [citationInsertStyle, setCitationInsertStyle] = useState<'oscola-footnote' | 'in-text-author-year' | 'in-text-numeric' | 'apa'>('oscola-footnote');
+  const [refSearch, setRefSearch] = useState('');
+  const [refFilter, setRefFilter] = useState<'all' | 'mendeley' | 'treaty' | 'case' | 'article' | 'book'>('all');
   const [aiActionRunning, setAiActionRunning] = useState(false);
   const [aiActionResult, setAiActionResult] = useState<string | null>(null);
   const [activeAIAction, setActiveAIAction] = useState<'gap-check' | 'counter-argument' | 'clarity-pass' | 'outline' | 'tighten-budget'>('gap-check');
@@ -212,47 +219,181 @@ export const TaskPane: React.FC<TaskPaneProps> = ({
               </div>
             ) : null}
 
-            {/* Library Header */}
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-slate-800">Verified Library</h3>
-                <span className="text-[10px] text-slate-500">
-                  {manuscript.sources.length} sources (AI cannot invent citations)
-                </span>
+            {/* Reference Library Header with Mendeley Support */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <span>Reference Library</span>
+                    <span className="text-[10px] bg-blue-100 text-blue-800 font-medium px-1.5 py-0.2 rounded">Mendeley</span>
+                  </h3>
+                  <span className="text-[10px] text-slate-500">
+                    {manuscript.sources.length} sources in verified library
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={onOpenImportReferences}
+                    className="flex items-center gap-1 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-[11px] shadow-2xs transition"
+                    title="Import Mendeley .bib (BibTeX) or .ris files"
+                  >
+                    <BookOpen className="w-3 h-3" />
+                    <span>Import .bib/.ris</span>
+                  </button>
+                  <button
+                    onClick={onOpenAddSource}
+                    className="p-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 text-[11px] transition"
+                    title="Add manual source"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={onOpenAddSource}
-                className="flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium text-[11px] shadow-2xs transition"
-              >
-                <Plus className="w-3 h-3" />
-                <span>Add Source</span>
-              </button>
+
+              {/* Citation Insertion Format Selector */}
+              <div className="bg-slate-100 p-2 rounded border border-slate-200 space-y-1">
+                <div className="flex items-center justify-between text-[10px] text-slate-600">
+                  <span className="font-semibold uppercase tracking-wider">Insert Citation Format:</span>
+                  <span className="text-blue-700 font-mono">Click card to insert</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-[11px]">
+                  <button
+                    onClick={() => setCitationInsertStyle('oscola-footnote')}
+                    className={`py-1 px-1.5 rounded text-left border transition ${
+                      citationInsertStyle === 'oscola-footnote'
+                        ? 'bg-blue-600 text-white border-blue-600 font-medium'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    Footnote [fn]
+                  </button>
+                  <button
+                    onClick={() => setCitationInsertStyle('in-text-author-year')}
+                    className={`py-1 px-1.5 rounded text-left border transition ${
+                      citationInsertStyle === 'in-text-author-year'
+                        ? 'bg-blue-600 text-white border-blue-600 font-medium'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    (Author, Year)
+                  </button>
+                  <button
+                    onClick={() => setCitationInsertStyle('in-text-numeric')}
+                    className={`py-1 px-1.5 rounded text-left border transition ${
+                      citationInsertStyle === 'in-text-numeric'
+                        ? 'bg-blue-600 text-white border-blue-600 font-medium'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    Numeric [1]
+                  </button>
+                  <button
+                    onClick={() => setCitationInsertStyle('apa')}
+                    className={`py-1 px-1.5 rounded text-left border transition ${
+                      citationInsertStyle === 'apa'
+                        ? 'bg-blue-600 text-white border-blue-600 font-medium'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    Author (Year)
+                  </button>
+                </div>
+              </div>
+
+              {/* Search and Filters */}
+              <div className="space-y-1.5">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+                  <input
+                    type="text"
+                    value={refSearch}
+                    onChange={e => setRefSearch(e.target.value)}
+                    placeholder="Search references by title, author, year..."
+                    className="w-full pl-8 pr-2.5 py-1 text-xs border border-slate-300 rounded bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1 text-[10px] overflow-x-auto pb-0.5">
+                  {(['all', 'mendeley', 'article', 'book', 'treaty', 'case'] as const).map(f => (
+                    <button
+                      key={f}
+                      onClick={() => setRefFilter(f as any)}
+                      className={`px-2 py-0.5 rounded capitalize whitespace-nowrap transition ${
+                        refFilter === f
+                          ? 'bg-blue-600 text-white font-medium'
+                          : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
-            {/* Sources List */}
-            <div className="space-y-2">
-              {manuscript.sources.map(src => (
-                <div
-                  key={src.id}
-                  className="bg-white border border-slate-200 rounded p-2.5 hover:border-blue-300 transition"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                      {src.kind}
-                    </span>
-                    <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      {src.verification}
-                    </span>
-                  </div>
-                  <h4 className="font-medium text-slate-900 leading-snug">{src.title}</h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    {src.authors.join(', ')} ({src.year})
-                  </p>
-                  <div className="mt-1.5 pt-1.5 border-t border-slate-100 text-[10px] text-slate-400 font-mono truncate">
-                    {src.citationString}
-                  </div>
-                </div>
-              ))}
+            {/* Filtered Sources List */}
+            <div className="space-y-2 max-h-[420px] overflow-y-auto pr-0.5">
+              {manuscript.sources
+                .filter(s => {
+                  if (refSearch) {
+                    const q = refSearch.toLowerCase();
+                    const matchesTitle = s.title.toLowerCase().includes(q);
+                    const matchesAuthor = s.authors.some(a => a.toLowerCase().includes(q));
+                    const matchesYear = s.year.toString().includes(q);
+                    if (!matchesTitle && !matchesAuthor && !matchesYear) return false;
+                  }
+                  if (refFilter === 'mendeley') {
+                    return s.tags?.includes('mendeley') || s.id.startsWith('mendeley_') || s.id.startsWith('ris_');
+                  }
+                  if (refFilter === 'article') return s.kind === 'journal-article';
+                  if (refFilter === 'book') return s.kind === 'book-chapter';
+                  if (refFilter === 'treaty') return s.kind === 'treaty' || s.kind === 'un-document';
+                  if (refFilter === 'case') return s.kind === 'case';
+                  return true;
+                })
+                .map((src, index) => {
+                  const isMendeley = src.tags?.includes('mendeley') || src.id.startsWith('mendeley_') || src.id.startsWith('ris_');
+                  return (
+                    <div
+                      key={src.id}
+                      onClick={() => onInsertCitationToEditor(src, citationInsertStyle)}
+                      className="group bg-white border border-slate-200 hover:border-blue-500 hover:shadow-xs rounded p-2.5 cursor-pointer transition relative"
+                      title="Click to insert citation at cursor in editor"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            {src.kind}
+                          </span>
+                          {isMendeley && (
+                            <span className="text-[9px] px-1 py-0.2 bg-indigo-50 text-indigo-700 font-semibold rounded border border-indigo-200">
+                              Mendeley
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onInsertCitationToEditor(src, citationInsertStyle);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-medium transition"
+                        >
+                          + Insert
+                        </button>
+                      </div>
+
+                      <h4 className="font-medium text-slate-900 leading-snug group-hover:text-blue-900 transition-colors">
+                        {src.title}
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {src.authors.join(', ')} ({src.year})
+                      </p>
+                      <div className="mt-1.5 pt-1.5 border-t border-slate-100 text-[10px] text-slate-400 font-mono truncate">
+                        {src.citationString}
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
 
             {/* Citation Audit Results */}

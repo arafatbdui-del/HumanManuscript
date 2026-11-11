@@ -39,6 +39,111 @@
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
+/* TipTap ProseMirror Editor Typography & Legal Formatting */
+.ProseMirror {
+  outline: none !important;
+  min-height: 700px;
+}
+
+.ProseMirror p {
+  margin-bottom: 0.75rem;
+  line-height: 1.85;
+}
+
+.ProseMirror h1 {
+  font-family: 'Cinzel', 'Lora', Georgia, serif;
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  color: #0f172a;
+}
+
+.ProseMirror h2 {
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.35;
+  margin-top: 1.35rem;
+  margin-bottom: 0.5rem;
+  color: #1e293b;
+}
+
+.ProseMirror h3 {
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1.125rem;
+  font-weight: 600;
+  font-style: italic;
+  line-height: 1.4;
+  margin-top: 1rem;
+  margin-bottom: 0.4rem;
+  color: #334155;
+}
+
+.ProseMirror blockquote {
+  border-left: 3px solid #cbd5e1;
+  margin: 1rem 0 1rem 1.5rem;
+  padding-left: 1rem;
+  font-style: italic;
+  color: #475569;
+}
+
+.ProseMirror ul {
+  list-style-type: disc;
+  margin-left: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.ProseMirror ol {
+  list-style-type: decimal;
+  margin-left: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.ProseMirror li {
+  margin-bottom: 0.25rem;
+  line-height: 1.7;
+}
+
+.ProseMirror hr {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 1.5rem 0;
+}
+
+.ProseMirror sup {
+  font-size: 0.75em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+  top: -0.5em;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+
+.ProseMirror sub {
+  font-size: 0.75em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+  bottom: -0.25em;
+}
+
+.ProseMirror mark {
+  background-color: #fef08a;
+  border-radius: 2px;
+  padding: 0.1em 0.2em;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: #94a3b8;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
 /* Print simulation */
 @media print {
   .no-print {
