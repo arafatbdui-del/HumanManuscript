@@ -2,5 +2,7 @@
   "name": "HumanManuscript: Legal & Human Rights Studio",
   "description": "An offline-first, installable Windows PWA for writing, citing, and revising law and human rights journal articles for Scopus and Web of Science.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

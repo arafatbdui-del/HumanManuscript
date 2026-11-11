@@ -2,11 +2,12 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * HumanManuscript: Main Legal & Human Rights Studio Application (design.md)
- * Fully functional rich-text editor (TipTap), Word document parser (Mammoth),
- * PDF parser (PDF.js), and Mendeley reference importer (.bib and .ris).
+ * Fully functional MS Word-like writing environment with resizable three-column layout,
+ * live automated word counts per section, section addition/removal, and smooth editor navigation.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { Group, Panel, Separator } from 'react-resizable-panels';
 import { Manuscript, Section, Block, Footnote, Source, OriginalityFlag } from './types/manuscript';
 import {
   loadManuscript,
@@ -18,11 +19,18 @@ import {
 import { runFullOriginalityScan } from './services/originalityGuard';
 import { ParsedDocumentResult } from './services/documentParser';
 import { formatCitationForEditor } from './services/referenceParser';
+import {
+  DocumentSectionOutline,
+  DEFAULT_OUTLINE_SECTIONS,
+  calculateSectionWordCounts,
+  generateInitialFullManuscriptHtml,
+} from './services/outlineManager';
 import { TitleBar } from './components/TitleBar';
-import { Ribbon, RibbonTab } from './components/Ribbon';
+import { WordRibbon } from './components/WordRibbon';
 import { NavigationPane } from './components/NavigationPane';
 import { TipTapEditor, TipTapEditorHandle } from './components/editor/TipTapEditor';
-import { TaskPane, TaskPaneTab } from './components/TaskPane';
+import { TaskPane, AccordionSectionKey } from './components/TaskPane';
+import { Editor } from '@tiptap/react';
 import { StatusBar } from './components/StatusBar';
 import { AddSourceModal } from './components/modals/AddSourceModal';
 import { DocumentUploadModal } from './components/modals/DocumentUploadModal';
@@ -35,12 +43,16 @@ import { ContractInspectorModal } from './components/modals/ContractInspectorMod
 
 export default function App() {
   const [manuscript, setManuscript] = useState<Manuscript>(() => loadManuscript());
-  const [activeSectionId, setActiveSectionId] = useState<string>(() => {
-    const loaded = loadManuscript();
-    return loaded.sections[2]?.id || loaded.sections[0]?.id || 'sec-intro';
-  });
-  const [activeRibbonTab, setActiveRibbonTab] = useState<RibbonTab>('Home');
-  const [activeTaskPaneTab, setActiveTaskPaneTab] = useState<TaskPaneTab>('citations');
+  const [outlineSections, setOutlineSections] = useState<DocumentSectionOutline[]>(
+    () => DEFAULT_OUTLINE_SECTIONS
+  );
+  const [activeSectionId, setActiveSectionId] = useState<string>('sec-title');
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const prevSidebarsRef = useRef<{ left: boolean; right: boolean }>({ left: true, right: true });
+  const [activeAccordion, setActiveAccordion] = useState<AccordionSectionKey | null>('library');
   const [selectedFootnote, setSelectedFootnote] = useState<Footnote | null>(null);
   const [viewMode, setViewMode] = useState<'pages' | 'draft' | 'focus'>('pages');
   const [zoomLevel, setZoomLevel] = useState<number>(100);
@@ -48,6 +60,11 @@ export default function App() {
   const [fontFamily, setFontFamily] = useState<string>('font-serif-legal');
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedText, setLastSavedText] = useState('Saved locally');
+
+  // Full document continuous HTML state
+  const [fullContentHtml, setFullContentHtml] = useState<string>(() =>
+    generateInitialFullManuscriptHtml()
+  );
 
   // Modals state
   const [isAddSourceOpen, setIsAddSourceOpen] = useState(false);
@@ -75,7 +92,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [manuscript]);
 
-  // Global Keyboard Shortcuts (Ctrl+S, Ctrl+Alt+F, Ctrl+K)
+  // Global Keyboard Shortcuts (Ctrl+S, Ctrl+Alt+F, Ctrl+K, Ctrl+[, Ctrl+])
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -92,6 +109,12 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsCommandSearchOpen(prev => !prev);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === '[') {
+        e.preventDefault();
+        setIsLeftSidebarOpen(prev => !prev);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === ']') {
+        e.preventDefault();
+        setIsRightSidebarOpen(prev => !prev);
       }
     };
 
@@ -99,30 +122,75 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [manuscript]);
 
-  // Active section helper
-  const activeSection = manuscript.sections.find(s => s.id === activeSectionId) || manuscript.sections[0];
+  // Listen to browser native Fullscreen API changes (including Esc key and F11)
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isNowFullscreen = !!document.fullscreenElement;
+      setIsFullscreen(isNowFullscreen);
 
-  // Prepare initial HTML content for active section
-  const getActiveSectionHtml = () => {
-    return activeSection.blocks
-      .map(b => {
-        if (b.type === 'heading1') return `<h1>${b.content}</h1>`;
-        if (b.type === 'heading2') return `<h2>${b.content}</h2>`;
-        if (b.type === 'heading3') return `<h3>${b.content}</h3>`;
-        if (b.type === 'quote') return `<blockquote>${b.content}</blockquote>`;
-        return `<p>${b.content}</p>`;
-      })
-      .join('');
+      if (isNowFullscreen) {
+        // Entering Fullscreen / Focus Mode: automatically hide both sidebars to maximize editor space
+        setIsLeftSidebarOpen(false);
+        setIsRightSidebarOpen(false);
+        setViewMode('focus');
+      } else {
+        // Exiting Fullscreen: restore sidebars to previous state
+        setIsLeftSidebarOpen(prevSidebarsRef.current.left);
+        setIsRightSidebarOpen(prevSidebarsRef.current.right);
+        setViewMode('pages');
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  // Toggle Fullscreen using document.documentElement.requestFullscreen() / document.exitFullscreen()
+  const handleToggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        // Save current sidebar states before requesting fullscreen
+        prevSidebarsRef.current = {
+          left: isLeftSidebarOpen,
+          right: isRightSidebarOpen,
+        };
+        await document.documentElement.requestFullscreen();
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Native requestFullscreen failed or blocked by iframe:', err);
+      // Fallback for environments where requestFullscreen is restricted: toggle focus mode state directly
+      setIsFullscreen(prev => {
+        const next = !prev;
+        if (next) {
+          prevSidebarsRef.current = { left: isLeftSidebarOpen, right: isRightSidebarOpen };
+          setIsLeftSidebarOpen(false);
+          setIsRightSidebarOpen(false);
+          setViewMode('focus');
+        } else {
+          setIsLeftSidebarOpen(prevSidebarsRef.current.left);
+          setIsRightSidebarOpen(prevSidebarsRef.current.right);
+          setViewMode('pages');
+        }
+        return next;
+      });
+    }
   };
 
-  // Word metrics calculation
-  const currentSectionWords = activeSection.blocks.reduce((acc, b) => {
-    return acc + (b.content.trim().match(/\b\w+\b/g)?.length || 0);
-  }, 0);
+  // Active section helper
+  const activeSection =
+    manuscript.sections.find(s => s.id === activeSectionId) || manuscript.sections[0];
 
-  const totalManuscriptWords = manuscript.sections.reduce((acc, s) => {
-    return acc + s.blocks.reduce((bAcc, b) => bAcc + (b.content.match(/\b\w+\b/g)?.length || 0), 0);
-  }, 0);
+  // Calculate live total manuscript words across all active outline sections
+  const totalManuscriptWords = outlineSections
+    .filter(s => !s.isHidden)
+    .reduce((acc, s) => acc + s.wordCount, 0);
+
+  const activeSectionWordCount =
+    outlineSections.find(s => s.id === activeSectionId)?.wordCount || 0;
 
   const originalityRedCount = manuscript.originalityFlags.filter(
     f => f.kind === 'verbatim-match' && f.status === 'open'
@@ -131,6 +199,107 @@ export default function App() {
   const originalityOrangeCount = manuscript.originalityFlags.filter(
     f => f.kind === 'close-paraphrase' && f.status === 'open'
   ).length;
+
+  // Real-time Content Change handler from TipTap: updates section word counts on every keystroke
+  const handleTipTapContentChange = (html: string, plainText: string, wordCount: number) => {
+    setFullContentHtml(html);
+    const updatedCounts = calculateSectionWordCounts(html, outlineSections);
+    setOutlineSections(prev =>
+      prev.map(sec => ({
+        ...sec,
+        wordCount: updatedCounts[sec.id] !== undefined ? updatedCounts[sec.id] : sec.wordCount,
+      }))
+    );
+  };
+
+  // Smooth Navigation to Section in Editor Canvas
+  const handleNavigateToSection = (sectionId: string) => {
+    setActiveSectionId(sectionId);
+    tipTapRef.current?.scrollToSection(sectionId);
+  };
+
+  // Add Custom Section to Document Outline and Editor
+  const handleAddOutlineSection = (title: string, wordTarget: number = 1500) => {
+    const cleanId = `sec-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString().slice(-4)}`;
+    const newSec: DocumentSectionOutline = {
+      id: cleanId,
+      type: 'custom',
+      title,
+      subtitle: `Substantive section analysis`,
+      wordCount: 0,
+      wordTarget,
+      isHidden: false,
+      isDefault: false,
+      order: outlineSections.length + 1,
+    };
+
+    // Insert new section before Conclusion & Bibliography
+    setOutlineSections(prev => {
+      const conclusionIdx = prev.findIndex(s => s.type === 'conclusion');
+      if (conclusionIdx >= 0) {
+        const copy = [...prev];
+        copy.splice(conclusionIdx, 0, newSec);
+        return copy;
+      }
+      return [...prev, newSec];
+    });
+
+    // Also register a section entry in manuscript.sections for contracts and AI tools
+    const manuscriptSection: Section = {
+      id: cleanId,
+      manuscriptId: manuscript.id,
+      order: manuscript.sections.length + 1,
+      role: title,
+      title,
+      wordTarget,
+      status: 'drafting',
+      contract: {
+        role: title,
+        description: `Substantive analysis and jurisprudence for ${title}.`,
+        wordTarget,
+        wordTolerance: 150,
+        requiredMoves: ['doctrinal-analysis', 'primary-authority', 'concluding-argument'],
+        citationRules: ['Cite relevant treaties, statutes, or regional court precedents.'],
+      },
+      blocks: [
+        {
+          id: `blk_${cleanId}_01`,
+          sectionId: cleanId,
+          order: 1,
+          type: 'paragraph',
+          content: `Analysis for ${title}...`,
+        },
+      ],
+    };
+
+    setManuscript(prev => ({
+      ...prev,
+      sections: [...prev.sections, manuscriptSection],
+    }));
+
+    // Insert section heading into editor
+    const headingHtml = `<h2 id="${cleanId}" class="font-serif font-bold text-lg text-slate-800 mt-8 mb-2.5">${title}</h2><p>Write your substantive analysis for ${title} here...</p>`;
+    tipTapRef.current?.insertHtml(headingHtml);
+
+    // Scroll to the new section
+    setTimeout(() => {
+      handleNavigateToSection(cleanId);
+    }, 150);
+  };
+
+  // Close / Hide Section from Outline
+  const handleRemoveOrHideSection = (sectionId: string) => {
+    setOutlineSections(prev =>
+      prev.map(s => (s.id === sectionId ? { ...s, isHidden: true } : s))
+    );
+  };
+
+  // Restore Hidden Section
+  const handleRestoreSection = (sectionId: string) => {
+    setOutlineSections(prev =>
+      prev.map(s => (s.id === sectionId ? { ...s, isHidden: false } : s))
+    );
+  };
 
   // Insert Footnote Handler
   const handleInsertFootnote = (targetBlockId?: string) => {
@@ -145,7 +314,6 @@ export default function App() {
       citations: [],
     };
 
-    // Insert [fnX] superscript directly into the TipTap editor at cursor position
     tipTapRef.current?.insertCitation(`[fn${nextNumber}]`);
 
     setManuscript(prev => ({
@@ -154,46 +322,11 @@ export default function App() {
     }));
 
     setSelectedFootnote(newFootnote);
-    setActiveTaskPaneTab('citations');
+    setIsRightSidebarOpen(true);
+    setActiveAccordion('library');
   };
 
-  // Content updated from TipTap Editor
-  const handleTipTapContentChange = (html: string, plainText: string, wordCount: number) => {
-    // Parse paragraphs from HTML to update active section blocks
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    const nodes = Array.from(doc.body.children);
-
-    const updatedBlocks: Block[] = nodes.map((node, idx) => {
-      let type: Block['type'] = 'paragraph';
-      const tag = node.tagName.toLowerCase();
-      if (tag === 'h1') type = 'heading1';
-      else if (tag === 'h2') type = 'heading2';
-      else if (tag === 'h3') type = 'heading3';
-      else if (tag === 'blockquote') type = 'quote';
-
-      return {
-        id: activeSection.blocks[idx]?.id || `blk_${Date.now()}_${idx}`,
-        sectionId: activeSection.id,
-        order: idx + 1,
-        type,
-        content: node.textContent || '',
-      };
-    });
-
-    setManuscript(prev => ({
-      ...prev,
-      sections: prev.sections.map(s => {
-        if (s.id !== activeSection.id) return s;
-        return {
-          ...s,
-          blocks: updatedBlocks.length > 0 ? updatedBlocks : s.blocks,
-        };
-      }),
-    }));
-  };
-
-  // Document Upload Insertion Handler (Mammoth .docx, PDF.js .pdf, .txt)
+  // Document Upload Handler (Mammoth .docx, PDF.js .pdf, .txt)
   const handleInsertParsedDocument = (
     result: ParsedDocumentResult,
     mode: 'replace-section' | 'append-section' | 'new-section'
@@ -204,42 +337,10 @@ export default function App() {
     } else if (mode === 'append-section') {
       tipTapRef.current?.insertHtml(result.htmlContent);
     } else if (mode === 'new-section') {
-      const newSecId = `sec_${Date.now()}`;
-      const newSection: Section = {
-        id: newSecId,
-        manuscriptId: manuscript.id,
-        order: manuscript.sections.length + 1,
-        role: 'Uploaded Document',
-        title: result.title,
-        wordTarget: result.wordCount || 1500,
-        status: 'drafting',
-        contract: {
-          role: 'Uploaded Content',
-          description: `Extracted from uploaded ${result.fileType.toUpperCase()} file.`,
-          wordTarget: result.wordCount || 1500,
-          wordTolerance: 150,
-          requiredMoves: ['substantive-analysis', 'primary-authority'],
-          citationRules: ['Ensure citations are verified against library.'],
-        },
-        blocks: [
-          {
-            id: `blk_${Date.now()}`,
-            sectionId: newSecId,
-            order: 1,
-            type: 'paragraph',
-            content: result.plainText.substring(0, 500) + '...',
-          },
-        ],
-      };
-
-      setManuscript(prev => ({
-        ...prev,
-        sections: [...prev.sections, newSection],
-      }));
-      setActiveSectionId(newSecId);
+      handleAddOutlineSection(result.title, result.wordCount || 1500);
       setTimeout(() => {
-        tipTapRef.current?.setContent(result.htmlContent);
-      }, 50);
+        tipTapRef.current?.insertHtml(result.htmlContent);
+      }, 200);
     }
   };
 
@@ -249,7 +350,8 @@ export default function App() {
       ...prev,
       sources: [...importedSources, ...prev.sources],
     }));
-    setActiveTaskPaneTab('citations');
+    setIsRightSidebarOpen(true);
+    setActiveAccordion('library');
   };
 
   // Insert Citation at cursor in TipTap Editor
@@ -258,7 +360,6 @@ export default function App() {
     style: 'oscola-footnote' | 'in-text-author-year' | 'in-text-numeric' | 'apa'
   ) => {
     if (style === 'oscola-footnote') {
-      // Create new footnote and insert [fnX]
       const nextNum = manuscript.footnotes.length + 1;
       const newFn: Footnote = {
         id: `fn_${Date.now()}`,
@@ -281,49 +382,10 @@ export default function App() {
         footnotes: [...prev.footnotes, newFn],
       }));
     } else {
-      // In-text citation
       const indexNum = manuscript.sources.findIndex(s => s.id === source.id) + 1;
       const citeStr = formatCitationForEditor(source, style, indexNum > 0 ? indexNum : 1);
       tipTapRef.current?.insertCitation(citeStr);
     }
-  };
-
-  // Add Section to Skeleton
-  const handleAddSection = () => {
-    const secCount = manuscript.sections.length;
-    const newSecId = `sec_${Date.now()}`;
-    const newSection: Section = {
-      id: newSecId,
-      manuscriptId: manuscript.id,
-      order: secCount + 1,
-      role: 'Additional Analysis',
-      title: `${secCount - 2}. Comparative & Empirical Observations`,
-      wordTarget: 1500,
-      status: 'drafting',
-      contract: {
-        role: 'Comparative Analysis',
-        description: 'Examines comparative state practice and regional jurisprudence.',
-        wordTarget: 1500,
-        wordTolerance: 150,
-        requiredMoves: ['comparative-jurisprudence', 'regional-instruments', 'synthesised-finding'],
-        citationRules: ['Must cite primary domestic statutes or regional court judgments.'],
-      },
-      blocks: [
-        {
-          id: `blk_${Date.now()}`,
-          sectionId: newSecId,
-          order: 1,
-          type: 'paragraph',
-          content: 'A comparative inquiry across jurisdictions illustrates varied institutional responses to algorithmic content governance...',
-        },
-      ],
-    };
-
-    setManuscript(prev => ({
-      ...prev,
-      sections: [...prev.sections, newSection],
-    }));
-    setActiveSectionId(newSecId);
   };
 
   // Add Source to Verified Library
@@ -339,54 +401,18 @@ export default function App() {
     const prop = manuscript.proposals.find(p => p.id === proposalId);
     if (!prop) return;
 
-    let updatedSections = [...manuscript.sections];
-
     for (const op of prop.operations) {
       if (op.op === 'replace_text') {
-        updatedSections = updatedSections.map(sec => ({
-          ...sec,
-          blocks: sec.blocks.map(b => {
-            if (b.id === op.blockId) {
-              const updatedText = b.content.includes(op.before)
-                ? b.content.replace(op.before, op.after)
-                : `${b.content}\n\n${op.after}`;
-              return { ...b, content: updatedText };
-            }
-            return b;
-          }),
-        }));
-
-        // Also update active TipTap editor if current section
-        const activeBlock = activeSection.blocks.find(b => b.id === op.blockId);
-        if (activeBlock) {
-          tipTapRef.current?.insertHtml(`<p><strong>[Proposal Accepted]</strong> ${op.after}</p>`);
-        }
+        tipTapRef.current?.insertHtml(`<p><strong>[Proposal Accepted]</strong> ${op.after}</p>`);
       }
     }
 
     setManuscript(prev => ({
       ...prev,
-      sections: updatedSections,
       proposals: prev.proposals.map(p => (p.id === proposalId ? { ...p, status: 'accepted' } : p)),
       reviewerComments: prev.reviewerComments.map(c =>
         c.id === prop.commentId ? { ...c, status: 'applied' } : c
       ),
-      changeEvents: [
-        {
-          id: `chg_${Date.now()}`,
-          timestamp: Date.now(),
-          actor: { type: 'model', name: 'Gemini (Assistant)', model: prop.model },
-          op: 'replace',
-          target: { sectionId: activeSection.id, blockId: prop.operations[0]?.blockId || '' },
-          before: prop.operations[0]?.before || '',
-          after: prop.operations[0]?.after || '',
-          reason: `Applied proposal for reviewer comment ${prop.commentId}`,
-          commentId: prop.commentId,
-          proposalId: prop.id,
-          status: 'accepted',
-        },
-        ...prev.changeEvents,
-      ],
     }));
   };
 
@@ -436,7 +462,8 @@ export default function App() {
       ...prev,
       originalityFlags: updatedFlags,
     }));
-    setActiveTaskPaneTab('originality');
+    setIsRightSidebarOpen(true);
+    setActiveAccordion('guard');
   };
 
   // Update Contract
@@ -479,7 +506,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-100 font-sans text-slate-800">
-      {/* 1. Native Windows 10 Title Bar with PWA Install Button */}
+      {/* 1. Native Title Bar with Save and PWA Install */}
       <TitleBar
         documentTitle={manuscript.title}
         onSave={() => {
@@ -496,14 +523,33 @@ export default function App() {
         lastSavedText={lastSavedText}
       />
 
-      {/* 2. Word-Inspired Ribbon Toolbar */}
-      <Ribbon
-        activeTab={activeRibbonTab}
-        onSelectTab={setActiveRibbonTab}
-        onInsertFootnote={() => handleInsertFootnote()}
-        onOpenAddSource={() => setIsAddSourceOpen(true)}
+      {/* 2. Modern Word-Style Dropdown Menu & Compact Formatting Ribbon */}
+      <WordRibbon
+        editor={editor}
+        fontSize={fontSize}
+        onChangeFontSize={setFontSize}
+        fontFamily={fontFamily}
+        onChangeFontFamily={setFontFamily}
+        isLeftSidebarOpen={isLeftSidebarOpen && viewMode !== 'focus'}
+        onToggleLeftSidebar={() => {
+          setIsLeftSidebarOpen(prev => {
+            const next = !prev;
+            if (!isFullscreen) prevSidebarsRef.current.left = next;
+            return next;
+          });
+        }}
+        isRightSidebarOpen={isRightSidebarOpen && viewMode !== 'focus'}
+        onToggleRightSidebar={() => {
+          setIsRightSidebarOpen(prev => {
+            const next = !prev;
+            if (!isFullscreen) prevSidebarsRef.current.right = next;
+            return next;
+          });
+        }}
         onOpenUploadModal={() => setIsUploadDocOpen(true)}
         onOpenImportReferences={() => setIsImportRefsOpen(true)}
+        onInsertFootnote={() => handleInsertFootnote()}
+        onOpenAddSource={() => setIsAddSourceOpen(true)}
         onToggleTrackChanges={() => {
           setManuscript(prev => ({
             ...prev,
@@ -511,90 +557,131 @@ export default function App() {
           }));
         }}
         trackChangesActive={manuscript.settings.trackChanges}
-        onOpenReviewDesk={() => {
-          setActiveRibbonTab('Review');
-          setActiveTaskPaneTab('review');
-        }}
-        onOpenEvidenceWorkbench={() => {
-          setActiveRibbonTab('Research');
-          setActiveTaskPaneTab('workbench');
+        onOpenSection={tab => {
+          setIsRightSidebarOpen(true);
+          setActiveAccordion(tab);
         }}
         onRunCitationAudit={() => {
-          setActiveRibbonTab('References');
-          setActiveTaskPaneTab('citations');
+          setIsRightSidebarOpen(true);
+          setActiveAccordion('library');
         }}
-        onRunOriginalityScan={handleRunOriginalityScan}
-        onOpenLanguageStudio={() => {
-          setActiveRibbonTab('Language');
-          setActiveTaskPaneTab('language');
+        onRunOriginalityScan={() => {
+          handleRunOriginalityScan();
+          setIsRightSidebarOpen(true);
+          setActiveAccordion('guard');
         }}
         onOpenPreSubmissionChecklist={() => setIsPreSubmissionOpen(true)}
         onExportWord={() => exportToWordDocument(manuscript, manuscript.settings.trackChanges)}
         onExportResponseLetter={() => setIsResponseLetterOpen(true)}
         onExportAIStatement={handleExportAIStatement}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         viewMode={viewMode}
         onSetViewMode={setViewMode}
         onOpenCommandSearch={() => setIsCommandSearchOpen(true)}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={handleToggleFullscreen}
       />
 
-      {/* 3. Main Workspace Area: Left Navigation | Center TipTap Editor | Right Task Pane */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Navigation Pane (Headings tree & section contracts) */}
-        {viewMode !== 'focus' && (
-          <NavigationPane
-            sections={manuscript.sections}
-            activeSectionId={activeSectionId}
-            onSelectSection={setActiveSectionId}
-            onAddSection={handleAddSection}
-            onOpenContractInspector={sec => setContractInspectorSection(sec)}
-          />
-        )}
+      {/* 3. Highly Functional Resizable Three-Column Layout (react-resizable-panels) */}
+      <div className="flex-1 overflow-hidden relative">
+        <Group orientation="horizontal" className="h-full w-full">
+          {/* Left Panel: Document Outline & Navigation */}
+          {isLeftSidebarOpen && viewMode !== 'focus' && (
+            <>
+              <Panel
+                id="panel-outline"
+                defaultSize="22%"
+                minSize="14%"
+                maxSize="38%"
+                className="h-full overflow-hidden bg-slate-50 border-r border-slate-200 shadow-2xs z-10"
+              >
+                <NavigationPane
+                  sections={outlineSections}
+                  activeSectionId={activeSectionId}
+                  totalWordCount={totalManuscriptWords}
+                  onNavigateToSection={handleNavigateToSection}
+                  onAddSection={handleAddOutlineSection}
+                  onRemoveOrHideSection={handleRemoveOrHideSection}
+                  onRestoreSection={handleRestoreSection}
+                  onToggleCollapse={() => setIsLeftSidebarOpen(false)}
+                />
+              </Panel>
 
-        {/* Center Canvas: Full Rich Text TipTap Editor with Word A4 Pages View */}
-        <TipTapEditor
-          ref={tipTapRef}
-          initialContent={getActiveSectionHtml()}
-          activeSection={activeSection}
-          footnotes={manuscript.footnotes}
-          viewMode={viewMode}
-          zoomLevel={zoomLevel}
-          onContentChange={handleTipTapContentChange}
-          onOpenUploadModal={() => setIsUploadDocOpen(true)}
-          onInsertFootnoteClick={() => handleInsertFootnote()}
-          onSelectFootnote={fn => {
-            setSelectedFootnote(fn);
-            setActiveTaskPaneTab('citations');
-          }}
-          fontSize={fontSize}
-          onChangeFontSize={setFontSize}
-          fontFamily={fontFamily}
-          onChangeFontFamily={setFontFamily}
-        />
+              {/* Left Resizable Drag Handle Divider with smooth CSS transitions */}
+              <Separator className="w-1.5 hover:w-2 bg-slate-200 hover:bg-blue-500 active:bg-blue-600 transition-all duration-150 cursor-col-resize flex items-center justify-center group relative z-20 outline-none select-none">
+                <div className="w-0.5 h-7 bg-slate-400 group-hover:bg-white rounded-full transition-colors pointer-events-none" />
+              </Separator>
+            </>
+          )}
 
-        {/* Right Contextual Task Pane (Reference Library with Mendeley support, Workbench, Review Desk, etc.) */}
-        {viewMode !== 'focus' && (
-          <TaskPane
-            activeTab={activeTaskPaneTab}
-            onSelectTab={setActiveTaskPaneTab}
-            manuscript={manuscript}
-            activeSection={activeSection}
-            selectedFootnote={selectedFootnote}
-            onSelectFootnote={setSelectedFootnote}
-            onOpenAddSource={() => setIsAddSourceOpen(true)}
-            onOpenImportReferences={() => setIsImportRefsOpen(true)}
-            onInsertCitationToEditor={handleInsertCitationToEditor}
-            onApplyProposal={handleApplyProposal}
-            onRejectProposal={handleRejectProposal}
-            onUpdateFootnoteContent={handleUpdateFootnoteContent}
-            onFixOriginalityFlag={handleFixOriginalityFlag}
-          />
-        )}
+          {/* Center Panel: Full Rich-Text TipTap Editor Canvas */}
+          <Panel id="panel-editor" minSize="35%" className="h-full overflow-hidden flex flex-col z-0">
+            <TipTapEditor
+              ref={tipTapRef}
+              initialContent={fullContentHtml}
+              activeSection={activeSection}
+              footnotes={manuscript.footnotes}
+              viewMode={viewMode}
+              zoomLevel={zoomLevel}
+              onContentChange={handleTipTapContentChange}
+              onOpenUploadModal={() => setIsUploadDocOpen(true)}
+              onInsertFootnoteClick={() => handleInsertFootnote()}
+              onSelectFootnote={fn => {
+                setSelectedFootnote(fn);
+                setIsRightSidebarOpen(true);
+                setActiveAccordion('library');
+              }}
+              fontSize={fontSize}
+              onChangeFontSize={setFontSize}
+              fontFamily={fontFamily}
+              onChangeFontFamily={setFontFamily}
+              onEditorReady={setEditor}
+            />
+          </Panel>
+
+          {/* Right Panel: Reference Library & Research Tools */}
+          {isRightSidebarOpen && viewMode !== 'focus' && (
+            <>
+              {/* Right Resizable Drag Handle Divider with smooth CSS transitions */}
+              <Separator className="w-1.5 hover:w-2 bg-slate-200 hover:bg-blue-500 active:bg-blue-600 transition-all duration-150 cursor-col-resize flex items-center justify-center group relative z-20 outline-none select-none">
+                <div className="w-0.5 h-7 bg-slate-400 group-hover:bg-white rounded-full transition-colors pointer-events-none" />
+              </Separator>
+
+              <Panel
+                id="panel-taskpane"
+                defaultSize="26%"
+                minSize="18%"
+                maxSize="45%"
+                className="h-full overflow-hidden bg-slate-50 border-l border-slate-200 shadow-2xs z-10"
+              >
+                <TaskPane
+                  isOpen={isRightSidebarOpen}
+                  onClose={() => setIsRightSidebarOpen(false)}
+                  activeAccordion={activeAccordion}
+                  onToggleAccordion={key => setActiveAccordion(prev => (prev === key ? null : key))}
+                  manuscript={manuscript}
+                  activeSection={activeSection}
+                  selectedFootnote={selectedFootnote}
+                  onSelectFootnote={setSelectedFootnote}
+                  onOpenAddSource={() => setIsAddSourceOpen(true)}
+                  onOpenImportReferences={() => setIsImportRefsOpen(true)}
+                  onInsertCitationToEditor={handleInsertCitationToEditor}
+                  onApplyProposal={handleApplyProposal}
+                  onRejectProposal={handleRejectProposal}
+                  onUpdateFootnoteContent={handleUpdateFootnoteContent}
+                  onFixOriginalityFlag={handleFixOriginalityFlag}
+                  onAddSourceDirectly={handleAddSource}
+                />
+              </Panel>
+            </>
+          )}
+        </Group>
       </div>
 
       {/* 4. Bottom Word-Style Status Bar */}
       <StatusBar
-        currentSectionWords={currentSectionWords}
-        sectionTargetWords={activeSection.wordTarget}
+        currentSectionWords={activeSectionWordCount}
+        sectionTargetWords={activeSection.wordTarget || 1500}
         totalManuscriptWords={totalManuscriptWords}
         originalityRedCount={originalityRedCount}
         originalityOrangeCount={originalityOrangeCount}
@@ -646,7 +733,7 @@ export default function App() {
         isOpen={isCommandSearchOpen}
         onClose={() => setIsCommandSearchOpen(false)}
         manuscript={manuscript}
-        onSelectSection={setActiveSectionId}
+        onSelectSection={handleNavigateToSection}
         onOpenAddSource={() => setIsAddSourceOpen(true)}
         onInsertFootnote={() => handleInsertFootnote()}
       />

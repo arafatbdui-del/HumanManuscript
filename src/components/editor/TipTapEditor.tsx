@@ -2,11 +2,13 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * Microsoft Word-Style TipTap Editor Canvas (A4 Paper Layout & Rich Formatting)
+ * Continuous manuscript editing with real-time word count sync and smooth section scrolling.
  */
 
 import React, { useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import Heading from '@tiptap/extension-heading';
 import Underline from '@tiptap/extension-underline';
 import TextAlign from '@tiptap/extension-text-align';
 import Highlight from '@tiptap/extension-highlight';
@@ -14,7 +16,6 @@ import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import { Footnote, Section } from '../../types/manuscript';
 import { WordRuler } from './WordRuler';
-import { RichTextToolbar } from './RichTextToolbar';
 
 export interface TipTapEditorHandle {
   insertCitation: (citationText: string) => void;
@@ -22,6 +23,7 @@ export interface TipTapEditorHandle {
   setContent: (htmlOrText: string) => void;
   getHtml: () => string;
   getText: () => string;
+  scrollToSection: (sectionId: string) => void;
 }
 
 interface TipTapEditorProps {
@@ -38,6 +40,7 @@ interface TipTapEditorProps {
   onChangeFontSize: (size: string) => void;
   fontFamily: string;
   onChangeFontFamily: (font: string) => void;
+  onEditorReady?: (editor: any) => void;
 }
 
 export const TipTapEditor = forwardRef<TipTapEditorHandle, TipTapEditorProps>(
@@ -56,14 +59,28 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, TipTapEditorProps>(
       onChangeFontSize,
       fontFamily,
       onChangeFontFamily,
+      onEditorReady,
     },
     ref
   ) => {
     const editor = useEditor({
       extensions: [
         StarterKit.configure({
-          heading: {
-            levels: [1, 2, 3],
+          heading: false, // Replaced with custom Heading below to preserve id attributes
+        }),
+        Heading.configure({ levels: [1, 2, 3, 4] }).extend({
+          addAttributes() {
+            return {
+              ...this.parent?.(),
+              id: {
+                default: null,
+                parseHTML: element => element.getAttribute('id'),
+                renderHTML: attributes => {
+                  if (!attributes.id) return {};
+                  return { id: attributes.id };
+                },
+              },
+            };
           },
         }),
         Underline,
@@ -80,7 +97,7 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, TipTapEditorProps>(
       content: initialContent,
       editorProps: {
         attributes: {
-          class: `focus:outline-none min-h-[700px] text-justify selection:bg-amber-200 ${fontFamily}`,
+          class: `focus:outline-none min-h-[850px] text-justify selection:bg-amber-200 ${fontFamily}`,
           style: `font-size: ${fontSize};`,
         },
       },
@@ -93,11 +110,10 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, TipTapEditorProps>(
       },
     });
 
-    // Expose methods via ref so Reference Library in right sidebar can insert citations
+    // Expose methods via ref so Outline & Reference Library can interact with editor
     useImperativeHandle(ref, () => ({
       insertCitation: (citationText: string) => {
         if (!editor) return;
-        // If it starts with [fn, insert as superscript
         if (citationText.startsWith('[fn') || citationText.startsWith('[')) {
           editor.chain().focus().insertContent(`<sup>${citationText}</sup> `).run();
         } else {
@@ -114,32 +130,33 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, TipTapEditorProps>(
       },
       getHtml: () => editor?.getHTML() || '',
       getText: () => editor?.getText() || '',
+      scrollToSection: (sectionId: string) => {
+        // Try finding by exact id or data-section-id or heading text
+        const el =
+          document.getElementById(sectionId) ||
+          document.querySelector(`[data-section-id="${sectionId}"]`) ||
+          document.getElementById(`sec-${sectionId}`);
+
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          // Subtle pulse animation to show current section
+          el.classList.add('transition-all', 'duration-300', 'bg-blue-50/80', 'rounded', 'p-1');
+          setTimeout(() => {
+            el.classList.remove('bg-blue-50/80', 'p-1');
+          }, 1800);
+        }
+      },
     }));
 
-    // Update editor content when active section changes
+    // Notify parent when editor is ready for WordRibbon
     useEffect(() => {
-      if (editor && initialContent) {
-        // Only update if fundamentally different to avoid cursor reset
-        const currentHtml = editor.getHTML();
-        if (currentHtml.trim() !== initialContent.trim() && initialContent !== '') {
-          editor.commands.setContent(initialContent);
-        }
+      if (editor && onEditorReady) {
+        onEditorReady(editor);
       }
-    }, [activeSection.id, editor]);
+    }, [editor, onEditorReady]);
 
     return (
       <div className="flex-1 flex flex-col h-full bg-slate-200/90 overflow-hidden select-text">
-        {/* Word-style Rich Text Toolbar at top */}
-        <RichTextToolbar
-          editor={editor}
-          onOpenUploadModal={onOpenUploadModal}
-          onInsertFootnote={onInsertFootnoteClick}
-          fontSize={fontSize}
-          onChangeFontSize={onChangeFontSize}
-          fontFamily={fontFamily}
-          onChangeFontFamily={onChangeFontFamily}
-        />
-
         {/* Scrollable Canvas Area */}
         <div className="flex-1 overflow-y-auto flex flex-col items-center py-6 px-4">
           <div
@@ -153,29 +170,31 @@ export const TipTapEditor = forwardRef<TipTapEditorHandle, TipTapEditorProps>(
             <div
               className={`bg-white text-slate-900 border border-slate-300/80 transition-all ${
                 viewMode === 'pages'
-                  ? 'w-[820px] min-h-[1050px] px-16 py-14 word-page-shadow my-2 rounded-xs'
+                  ? 'w-[840px] min-h-[1100px] px-16 py-14 word-page-shadow my-2 rounded-xs'
                   : 'w-full max-w-4xl p-8 rounded-lg shadow-sm my-2'
               }`}
             >
               {/* Running Header */}
               {viewMode === 'pages' && (
                 <div className="flex items-center justify-between text-[11px] text-slate-400 font-serif pb-4 mb-6 border-b border-slate-200/60 select-none">
-                  <span className="italic truncate max-w-md">{activeSection.title}</span>
+                  <span className="italic truncate max-w-md">
+                    Algorithmic Content Moderation under Article 19(3) ICCPR
+                  </span>
                   <span className="font-sans text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
-                    Oxford Journal of Legal Studies / HRLR
+                    Oxford Human Rights Law Review / OUP
                   </span>
                 </div>
               )}
 
               {/* TipTap Rich Text Editor Surface */}
               <div
-                className="leading-[1.85] text-slate-900"
+                className="leading-[1.85] text-slate-900 min-h-[600px]"
                 style={{ fontSize }}
               >
                 <EditorContent editor={editor} />
               </div>
 
-              {/* Footnotes Section at Bottom of Page */}
+              {/* Footnotes Section at Bottom of Document */}
               {footnotes.length > 0 && (
                 <div className="mt-14 pt-4 border-t border-slate-900/80 select-text">
                   <div className="flex items-center justify-between mb-3 select-none">
