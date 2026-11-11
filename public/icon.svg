@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#0f172a"/>
+  <!-- Gold Accent Ring -->
+  <circle cx="256" cy="256" r="210" fill="none" stroke="#d97706" stroke-width="6" stroke-dasharray="16 10" opacity="0.6"/>
+  <!-- Scales of Justice & Quill Combined -->
+  <g transform="translate(256, 256)" stroke="#f8fafc" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Central Pillar -->
+    <path d="M0 -140 L0 140" stroke="#f1f5f9" stroke-width="14"/>
+    <path d="M-50 140 L50 140" stroke="#f1f5f9" stroke-width="16"/>
+    <path d="M-30 160 L30 160" stroke="#f1f5f9" stroke-width="12"/>
+    <circle cx="0" cy="-140" r="18" fill="#d97706" stroke="#fbbf24" stroke-width="4"/>
+    
+    <!-- Balance Beam -->
+    <path d="M-130 -80 L130 -80" stroke="#fbbf24" stroke-width="12"/>
+    
+    <!-- Left Scale Pan -->
+    <path d="M-130 -80 L-170 -10 M-130 -80 L-90 -10" stroke="#94a3b8" stroke-width="5"/>
+    <path d="M-180 -10 Q-130 50 -80 -10 Z" fill="#1e293b" stroke="#fbbf24" stroke-width="7"/>
+    
+    <!-- Right Scale Pan -->
+    <path d="M130 -80 L90 -10 M130 -80 L170 -10" stroke="#94a3b8" stroke-width="5"/>
+    <path d="M80 -10 Q130 50 180 -10 Z" fill="#1e293b" stroke="#fbbf24" stroke-width="7"/>
+
+    <!-- Legal Manuscript Book / Quill Overlay -->
+    <path d="M-40 60 C-20 50 0 65 0 65 C0 65 20 50 40 60 L40 100 C20 90 0 105 0 105 C0 105 -20 90 -40 100 Z" fill="#334155" stroke="#f1f5f9" stroke-width="6"/>
+  </g>
+</svg>
